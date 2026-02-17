@@ -24,6 +24,7 @@ pub const Memory = struct {
 /// DECODED INSTRUCTION FORMAT
 /// ============================================
 pub const Instruction = union(enum) {
+    ldr: struct { rd: u8, rn: u8, imm: u32 },
     mov: struct { rd: u8, imm: u32 },
     add: struct { rd: u8, rn: u8, imm: u32 },
     sub: struct { rd: u8, rn: u8, imm: u32 },
@@ -63,6 +64,19 @@ fn decode(word: u32) !Instruction {
         }
     }
 
+    if (type_bits == 1) {
+        const opcode = (word >> 21) & 0xF;
+        const rd: u8 = @intCast((word >> 12) & 0xF);
+        const rn: u8 = @intCast((word >> 16) & 0xF);
+        const i_bit = (word >> 25) & 1;
+
+        // LDR (opcode 12)
+        if (opcode == 12 and i_bit == 0) {
+            const imm = word & 0xFF;
+            return .{ .ldr = .{ .rd = rd, .rn = rn, .imm = imm } };
+        }
+    }
+
     // Branch with Link (BL)
     // Bits 27–25 = 101
     if (((word >> 25) & 0b111) == 0b101) {
@@ -99,6 +113,7 @@ fn printInstruction(inst: Instruction) void {
         .mov => |i| std.debug.print("MOV R{d}, #{d}", .{ i.rd, i.imm }),
         .add => |i| std.debug.print("ADD R{d}, R{d}, #{d}", .{ i.rd, i.rn, i.imm }),
         .sub => |i| std.debug.print("SUB R{d}, R{d}, #{d}", .{ i.rd, i.rn, i.imm }),
+        .ldr => |i| std.debug.print("SUB R{d}, R{d}, #{d}", .{ i.rd, i.rn, i.imm }),
         .bl => |i| std.debug.print("BL {d}", .{i.target}),
     }
 }
