@@ -27,6 +27,7 @@ pub const Instruction = union(enum) {
     ldr: struct { rd: u8, rn: u8, imm: u32 },
     mov: struct { rd: u8, imm: u32 },
     add: struct { rd: u8, rn: u8, imm: u32 },
+    add_reg: struct { rd: u8, rn: u8, rm: u8 },
     sub: struct { rd: u8, rn: u8, imm: u32 },
     bl: struct { target: usize },
 };
@@ -57,6 +58,16 @@ fn decode(word: u32) !Instruction {
             return .{ .add = .{ .rd = rd, .rn = rn, .imm = imm } };
         }
 
+        // ADD (opcode 4 and i_bit = 0 ie adding register)
+        if (opcode == 4 and i_bit == 0) {
+            const rm: u8 = @intCast(word & 0xF);
+            return .{ .add_reg = .{
+                .rd = rd,
+                .rn = rn,
+                .rm = rm,
+            } };
+        }
+
         // SUB (opcode 2)
         if (opcode == 2 and i_bit == 1) {
             const imm = word & 0xFF;
@@ -64,16 +75,19 @@ fn decode(word: u32) !Instruction {
         }
     }
 
-    if (type_bits == 1) {
-        const opcode = (word >> 21) & 0xF;
-        const rd: u8 = @intCast((word >> 12) & 0xF);
-        const rn: u8 = @intCast((word >> 16) & 0xF);
-        const i_bit = (word >> 25) & 1;
+    if (type_bits == 0b01) {
+        const l_bit = (word >> 20) & 1;
 
-        // LDR (opcode 12)
-        if (opcode == 12 and i_bit == 0) {
-            const imm = word & 0xFF;
-            return .{ .ldr = .{ .rd = rd, .rn = rn, .imm = imm } };
+        if (l_bit == 1) {
+            const rd: u8 = @intCast((word >> 12) & 0xF);
+            const rn: u8 = @intCast((word >> 16) & 0xF);
+            const offset = word & 0xFFF; // 12-bit immediate
+
+            return .{ .ldr = .{
+                .rd = rd,
+                .rn = rn,
+                .imm = offset,
+            } };
         }
     }
 
@@ -188,15 +202,15 @@ fn run(cpu: *Cpu, program: []Instruction) void {
 
 fn loop(memory: []u8) void {
     var cpu = Cpu{};
-    var pc: u32 = 0x10; // entry point
+    cpu.regs[15] = 0x10; // entry point
     var cycle: usize = 0;
 
     while (cycle < 10) { // temporary limit
-        const word = readU32(memory, pc);
+        const word = readU32(memory, cpu.regs[15]);
 
         std.debug.print(
             "\n====================\nCycle: {d}\nPC: 0x{x}\nRaw: 0x{x}\n",
-            .{ cycle, pc, word },
+            .{ cycle, cpu.regs[15], word },
         );
 
         const inst = decode(word) catch {
@@ -208,16 +222,39 @@ fn loop(memory: []u8) void {
         switch (inst) {
             .mov => |i| {
                 cpu.regs[i.rd] = i.imm;
-                pc += 4;
+                cpu.regs[15] += 4;
             },
             .add => |i| {
                 cpu.regs[i.rd] = cpu.regs[i.rn] + i.imm;
-                pc += 4;
+                cpu.regs[15] += 4;
+            },
+            .add_reg => |i| {
+                cpu.regs[i.rd] = cpu.regs[i.rn] + cpu.regs[i.rm];
+                cpu.regs[15] += 4;
             },
             .sub => |i| {
                 cpu.regs[i.rd] = cpu.regs[i.rn] - i.imm;
-                pc += 4;
+                cpu.regs[15] += 4;
             },
+            .ldr => |i| {
+                // Base value
+                const base = if (i.rn == 15)
+                    cpu.regs[15] + 8 // ARM visible PC rule
+                else
+                    cpu.regs[i.rn];
+
+                // Effective address (pre-indexed, U=1)
+                const addr = base + i.imm;
+
+                // Read memory
+                const value = readU32(memory, addr);
+
+                // Store result
+                cpu.regs[i.rd] = value;
+
+                cpu.regs[15] += 4;
+            },
+
             else => {
                 std.debug.print("Instruction not implemented yet\n", .{});
                 //                break;
