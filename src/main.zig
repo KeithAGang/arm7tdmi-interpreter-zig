@@ -29,7 +29,8 @@ pub const Instruction = union(enum) {
     add: struct { rd: u8, rn: u8, imm: u32 },
     add_reg: struct { rd: u8, rn: u8, rm: u8 },
     sub: struct { rd: u8, rn: u8, imm: u32 },
-    bl: struct { target: usize },
+    b: struct { offset: i32 },
+    bl: struct { offset: i32 },
 };
 
 /// ============================================
@@ -94,12 +95,21 @@ fn decode(word: u32) !Instruction {
     // Branch with Link (BL)
     // Bits 27–25 = 101
     if (((word >> 25) & 0b111) == 0b101) {
+        const l_bit = (word >> 24) & 1;
         const imm24 = word & 0x00FFFFFF;
 
-        // Sign-extend 24-bit immediate
-        const signed = @as(i32, @bitCast(imm24 << 8)) >> 6;
+        // Sign extend 24-bit immediate properly
+        var offset: i32 = @intCast(imm24);
 
-        return .{ .bl = .{ .target = @intCast(@as(isize, @divTrunc(signed, 4))) } };
+        if ((imm24 & 0x00800000) != 0) {
+            offset |= @as(i32, @bitCast(@as(u32, 0xFF000000))); // entend sign bit
+        }
+
+        if (l_bit == 1) {
+            return .{ .bl = .{ .offset = @intCast(offset) } };
+        } else {
+            return .{ .b = .{ .offset = @intCast(offset) } };
+        }
     }
 
     return error.UnsupportedInstruction;
@@ -128,7 +138,8 @@ fn printInstruction(inst: Instruction) void {
         .add => |i| std.debug.print("ADD R{d}, R{d}, #{d}", .{ i.rd, i.rn, i.imm }),
         .sub => |i| std.debug.print("SUB R{d}, R{d}, #{d}", .{ i.rd, i.rn, i.imm }),
         .ldr => |i| std.debug.print("SUB R{d}, R{d}, #{d}", .{ i.rd, i.rn, i.imm }),
-        .bl => |i| std.debug.print("BL {d}", .{i.target}),
+        .b => |i| std.debug.print("BL {d}", .{i.offsett}),
+        .bl => |i| std.debug.print("BL {d}", .{i.offsett}),
     }
 }
 
@@ -254,11 +265,23 @@ fn loop(memory: []u8) void {
 
                 cpu.regs[15] += 4;
             },
-
-            else => {
-                std.debug.print("Instruction not implemented yet\n", .{});
-                //                break;
+            .b => |i| {
+                const visible_pc = cpu.regs[15] + 8;
+                const target = @as(i32, @intCast(visible_pc)) + (i.offset << 2);
+                cpu.regs[15] = @intCast(target);
             },
+            .bl => |i| {
+                const visible_pc = cpu.regs[15] + 8;
+                const target = @as(i32, @intCast(visible_pc)) + (i.offset << 2);
+
+                cpu.regs[14] = cpu.regs[15] + 4; // LR = return address
+                cpu.regs[15] = @intCast(target);
+            },
+
+            //  else => {
+            //    std.debug.print("Instruction not implemented yet\n", .{});
+            //                break;
+            //},
         }
 
         dumpRegisters(&cpu);
