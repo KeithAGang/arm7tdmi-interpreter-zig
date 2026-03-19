@@ -28,6 +28,7 @@ pub const Instruction = union(enum) {
     mov: struct { rd: u8, imm: u32 },
     add: struct { rd: u8, rn: u8, imm: u32 },
     add_reg: struct { rd: u8, rn: u8, rm: u8 },
+    sub_reg: struct { rd: u8, rn: u8, rm: u8 },
     sub: struct { rd: u8, rn: u8, imm: u32 },
     b: struct { offset: i32 },
     bl: struct { offset: i32 },
@@ -73,6 +74,16 @@ fn decode(word: u32) !Instruction {
         if (opcode == 2 and i_bit == 1) {
             const imm = word & 0xFF;
             return .{ .sub = .{ .rd = rd, .rn = rn, .imm = imm } };
+        }
+
+        // SUB (opcode 2 i_bit = 0 ie subtracting register)
+        if (opcode == 2 and i_bit == 0) {
+            const rm: u8 = @intCast(word & 0xF);
+            return .{ .sub_reg = .{
+                .rd = rd,
+                .rn = rn,
+                .rm = rm,
+            } };
         }
     }
 
@@ -137,9 +148,9 @@ fn printInstruction(inst: Instruction) void {
         .mov => |i| std.debug.print("MOV R{d}, #{d}", .{ i.rd, i.imm }),
         .add => |i| std.debug.print("ADD R{d}, R{d}, #{d}", .{ i.rd, i.rn, i.imm }),
         .sub => |i| std.debug.print("SUB R{d}, R{d}, #{d}", .{ i.rd, i.rn, i.imm }),
-        .ldr => |i| std.debug.print("SUB R{d}, R{d}, #{d}", .{ i.rd, i.rn, i.imm }),
-        .b => |i| std.debug.print("BL {d}", .{i.offsett}),
-        .bl => |i| std.debug.print("BL {d}", .{i.offsett}),
+        .ldr => |i| std.debug.print("LDR R{d}, [R{d}, #{d}]", .{ i.rd, i.rn, i.imm }),
+        .b => |i| std.debug.print("B {d}", .{i.offset}),
+        .bl => |i| std.debug.print("BL {d}", .{i.offset}),
     }
 }
 
@@ -165,53 +176,7 @@ fn readU32(memory: []u8, addr: u32) u32 {
 /// ============================================
 /// EXECUTION STAGE (HOT LOOP)
 /// ============================================
-fn run(cpu: *Cpu, program: []Instruction) void {
-    var pc: u32 = 0x10; // entry point
-    var cycle: usize = 0;
-
-    while (pc < program.len) {
-        const inst = program[pc];
-
-        std.debug.print(
-            "\n==============================\n",
-            .{},
-        );
-        std.debug.print("Cycle: {d}\n", .{cycle});
-        std.debug.print("PC: {d}\n", .{pc});
-        std.debug.print("Instruction: ", .{});
-        printInstruction(inst);
-        std.debug.print("\n\n", .{});
-
-        // Execute instruction
-        switch (inst) {
-            .mov => |i| {
-                cpu.regs[i.rd] = i.imm;
-                pc += 1;
-            },
-            .add => |i| {
-                cpu.regs[i.rd] = cpu.regs[i.rn] + i.imm;
-                pc += 1;
-            },
-            .sub => |i| {
-                cpu.regs[i.rd] = cpu.regs[i.rn] - i.imm;
-                pc += 1;
-            },
-            .bl => |i| {
-                // Save return address in R14 (Link Register)
-                cpu.regs[14] = @intCast(pc + 1);
-
-                // Branch
-                pc = @intCast(i.target);
-            },
-        }
-
-        dumpRegisters(cpu);
-
-        cycle += 1;
-    }
-}
-
-fn loop(memory: []u8) void {
+fn run(memory: []u8) void {
     var cpu = Cpu{};
     cpu.regs[15] = 0x10; // entry point
     var cycle: usize = 0;
@@ -247,6 +212,11 @@ fn loop(memory: []u8) void {
                 cpu.regs[i.rd] = cpu.regs[i.rn] - i.imm;
                 cpu.regs[15] += 4;
             },
+            .sub_reg => |i| {
+                cpu.regs[i.rd] = cpu.regs[i.rn] - cpu.regs[i.rm];
+                cpu.regs[15] += 4;
+            },
+
             .ldr => |i| {
                 // Base value
                 const base = if (i.rn == 15)
@@ -294,23 +264,9 @@ fn loop(memory: []u8) void {
 /// MAIN — SIMULATION ENTRY POINT
 /// ============================================
 pub fn main() !void {
-    // var cpu = Cpu{};
-
-    // Simulated ARM machine code
-    //const raw_program = [_]u32{
-    //    0xE3A0000A, // MOV R0, #10
-    //    0xE3A0100B, // MOV R1, #11
-    //    0xE2802005, // ADD R2, R0, #5
-    //    0xE2403002, // SUB R3, R0, #2
-    //};
-
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    //const decoded = try decodeProgram(&raw_program, allocator);
-    //defer allocator.free(decoded);
-
-    //run(&cpu, decoded);
     const memory_size = 128 * 1024;
     const memory = try allocator.alloc(u8, memory_size);
     defer allocator.free(memory);
@@ -325,5 +281,5 @@ pub fn main() !void {
 
     std.debug.print("Loaded {d} bytes into memory.\n", .{file_size});
 
-    loop(memory);
+    run(memory);
 }
